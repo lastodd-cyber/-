@@ -347,17 +347,20 @@ class Q:
     stem: 발문(첫 문단). parts: 발문 뒤에 올 자료(문자열이면 문단, 그 밖엔 flowable).
     choices: 선지 5개(문자열). layout: auto|stack|row|grid3|grid2.
     choice_tbl: choice_table(...)로 만든 표를 선지 대신 쓸 때.
-    ans: 정답 번호(1~5, 복수 정답이면 튜플). exp: 해설. src: 출제 근거.
+    ans: 정답 번호(1~5, 복수 정답이면 튜플). exp: 해설(문자열 또는 줄 목록).
+    concept: 핵심 개념. ans_text: 정답지에 쓸 정답 내용(없으면 선지 문장).
+    src: 출제 근거.
     """
 
     kind = "mc"
 
     def __init__(self, num, stem, pts, choices=None, ans=None, exp="",
-                 parts=(), layout="auto", choice_tbl=None, src=""):
+                 parts=(), layout="auto", choice_tbl=None, src="",
+                 concept="", ans_text=None):
         self.num, self.stem, self.pts = num, stem, pts
         self.choices, self.ans, self.exp = choices, ans, exp
         self.parts, self.layout, self.choice_tbl = list(parts), layout, choice_tbl
-        self.src = src
+        self.src, self.concept, self.ans_text = src, concept, ans_text
 
     def flowables(self):
         texts = _fill_pts([self.stem] + self.parts, self.pts)
@@ -382,29 +385,38 @@ class Q:
 
 
 class Sub:
-    """논술형의 소문항. box_h: 답안 칸 높이(pt)."""
+    """논술형의 소문항. box_h: 답안 칸 높이(pt).
+
+    ans: 짧은 답(빠른 정답용), model: 모범 답안(문자열 또는 줄 목록),
+    rubric: 채점 기준 문장 목록.
+    """
 
     def __init__(self, text, pts, box_h=90, ans="", label=None,
-                 answer_strip=False, parts=()):
+                 answer_strip=False, parts=(), model=(), rubric=()):
         self.text, self.pts, self.box_h, self.ans = text, pts, box_h, ans
         self.label, self.answer_strip, self.parts = label, answer_strip, list(parts)
+        self.model = [model] if isinstance(model, str) else list(model)
+        self.rubric = list(rubric)
 
 
 class Essay:
     """논술형 문항. subs가 없으면 box_h 크기의 답안 칸 하나.
 
-    ans: 예시 답안, rubric: 채점 기준 [(기준, 점수), ...]
+    ans: 짧은 답, model: 모범 답안, rubric: 채점 기준 문장 목록
     """
 
     kind = "essay"
 
     def __init__(self, num, stem, pts=None, parts=(), subs=(), box_h=120,
-                 label=None, answer_strip=False, ans="", rubric=(), src=""):
+                 label=None, answer_strip=False, ans="", rubric=(), src="",
+                 model=(), concept=""):
         self.num, self.stem, self.parts = num, stem, list(parts)
         self.subs = list(subs)
         self.pts = pts if pts is not None else sum(s.pts for s in self.subs)
         self.box_h, self.label, self.answer_strip = box_h, label, answer_strip
         self.ans, self.rubric, self.src = ans, list(rubric), src
+        self.model = [model] if isinstance(model, str) else list(model)
+        self.concept = concept
 
     def flowables(self):
         head = [_Marker(self.kind, self.num)]
@@ -448,7 +460,10 @@ class Group:
     def flowables(self):
         lead = [Paragraph(self.header, ST_STEM), Spacer(1, 2)] + self.parts + [Spacer(1, 6)]
         first = self.questions[0].flowables()
-        out = [KeepTogether(lead + first[:1])] + first[1:]
+        # KeepTogether를 겹쳐 넣으면 높이가 무한대로 계산되어 항상 다음 단으로 밀리므로 내용만 꺼내 합친다
+        head = first[0]
+        inner = list(head._content) if isinstance(head, KeepTogether) else [head]
+        out = [KeepTogether(lead + inner)] + first[1:]
         for q in self.questions[1:]:
             out.extend(q.flowables())
         return out
@@ -614,83 +629,148 @@ class Exam:
 
 
 # ---------------------------------------------------------------- 정답·해설
-def build_key(exam, path):
+def _lines(x):
+    if not x:
+        return []
+    return [x] if isinstance(x, str) else list(x)
+
+
+class _SectionBar(Flowable):
+    """회색 바탕의 구역 제목 줄('빠른 정답', '객관식 풀이' 등)."""
+
+    def __init__(self, text):
+        super().__init__()
+        self.text = text
+        self.spaceBefore = 10
+        self.spaceAfter = 6
+
+    def wrap(self, aw, ah):
+        self.width = aw
+        return aw, 19
+
+    def draw(self):
+        c = self.canv
+        c.setFillColor(colors.HexColor("#E6E6E6"))
+        c.rect(0, 0, self.width, 19, stroke=0, fill=1)
+        c.setFillColor(colors.black)
+        c.setFont("KR-B", 9.6)
+        c.drawString(10, 6, self.text)
+
+
+def build_key(exam, path, footer=None):
     from reportlab.platypus import SimpleDocTemplate
 
-    st_title = ParagraphStyle("kt", fontName="KR-B", fontSize=15, leading=20)
-    st_small = ParagraphStyle("ks", fontName="KR", fontSize=8.5, leading=12,
-                              textColor=GREY)
-    st_h = ParagraphStyle("kh", fontName="KR-B", fontSize=11, leading=16,
-                          spaceBefore=10, spaceAfter=4)
-    st_q = ParagraphStyle("kq", fontName="KR", fontSize=9.4, leading=14.2,
-                          leftIndent=34, firstLineIndent=-34, spaceBefore=5)
-    st_p = ParagraphStyle("kp", fontName="KR", fontSize=9.2, leading=14,
-                          leftIndent=34)
-    st_c = ParagraphStyle("kc", fontName="KR", fontSize=9.4, leading=12,
+    footer = footer or "자체 제작 예상문제의 정답 · 학교 공식 정답이 아님"
+    st_q = ParagraphStyle("kq", fontName="KR", fontSize=9.2, leading=13.6,
+                          spaceBefore=7)
+    st_p = ParagraphStyle("kp", fontName="KR", fontSize=8.9, leading=13,
+                          leftIndent=12)
+    st_label = ParagraphStyle("kl", fontName="KR-B", fontSize=8.9, leading=13,
+                              leftIndent=12, spaceBefore=2)
+    st_p2 = ParagraphStyle("kp2", parent=st_p, leftIndent=22)
+    st_note = ParagraphStyle("kn", fontName="KR", fontSize=8.9, leading=13)
+    st_quick = ParagraphStyle("kqk", fontName="KR", fontSize=8.9, leading=13,
+                              leftIndent=48, firstLineIndent=-48, spaceBefore=2)
+    st_c = ParagraphStyle("kc", fontName="KR", fontSize=9.2, leading=12,
                           alignment=TA_CENTER)
 
     qs = exam.questions()
     mcs = [q for q in qs if q.kind == "mc"]
     ess = [q for q in qs if q.kind == "essay"]
 
-    def ans_str(a):
+    def ans_mark(a):
         if isinstance(a, (tuple, list)):
             return ", ".join(CIRCLED[i - 1] for i in a)
         return CIRCLED[a - 1] if isinstance(a, int) else str(a)
 
-    story = [Paragraph(exam.title + " 정답 및 해설", st_title),
-             Paragraph(exam.top + " · " + exam._summary_text(), st_small),
-             Spacer(1, 8)]
-    # 빠른 정답표 (한 줄에 10문항)
-    rows = []
-    for i in range(0, len(mcs), 10):
-        chunk = mcs[i:i + 10]
-        rows.append([Paragraph("<b>번호</b>", st_c)] +
-                    [Paragraph(str(q.num), st_c) for q in chunk] +
-                    [""] * (10 - len(chunk)))
-        rows.append([Paragraph("<b>정답</b>", st_c)] +
-                    [Paragraph(ans_str(q.ans), st_c) for q in chunk] +
-                    [""] * (10 - len(chunk)))
+    def ans_text(q):
+        if q.ans_text is not None:
+            return q.ans_text
+        if q.choices and isinstance(q.ans, int):
+            return _strip_tags(q.choices[q.ans - 1])
+        return ""
+
+    story = [_SectionBar("빠른 정답")]
+    per_row = 11
+    rows, style = [], [("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+                       ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                       ("TOPPADDING", (0, 0), (-1, -1), 3),
+                       ("BOTTOMPADDING", (0, 0), (-1, -1), 4.5)]
+    for i in range(0, len(mcs), per_row):
+        chunk = mcs[i:i + per_row]
+        rows.append([Paragraph(str(q.num), st_c) for q in chunk] + [""] * (per_row - len(chunk)))
+        rows.append([Paragraph(ans_mark(q.ans), st_c) for q in chunk] + [""] * (per_row - len(chunk)))
+        if len(chunk) < per_row:
+            r = len(rows)
+            style.append(("GRID", (len(chunk), r - 2), (-1, r - 1), 0, colors.white))
+            style.append(("LINEBEFORE", (len(chunk), r - 2), (len(chunk), r - 1), 0.5, colors.black))
     if rows:
-        w = (PAGE_W - 2 * MARGIN_X)
-        t = Table(rows, colWidths=[w * 0.1] + [w * 0.09] * 10)
-        style = [("GRID", (0, 0), (-1, -1), 0.5, colors.black),
-                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                 ("TOPPADDING", (0, 0), (-1, -1), 3),
-                 ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]
-        for r in range(0, len(rows), 2):
-            style.append(("BACKGROUND", (0, r), (-1, r), colors.HexColor("#EDEDED")))
+        w = PAGE_W - 2 * MARGIN_X
+        t = Table(rows, colWidths=[w / per_row] * per_row)
         t.setStyle(TableStyle(style))
         story.append(t)
+    story.append(Spacer(1, 7))
+    for q in ess:
+        if q.subs:
+            quick = " ".join("%s %s" % (_sub_tag(q.num, s), s.ans) for s in q.subs)
+        else:
+            quick = q.ans
+        story.append(Paragraph("<b>논술형 %s</b>&nbsp;&nbsp;%s" % (q.num, quick), st_quick))
 
-    story.append(Paragraph("선택형 해설", st_h))
+    story.append(_SectionBar("객관식 풀이"))
     for q in mcs:
-        story.append(Paragraph("<b>%s.</b>&nbsp;&nbsp;<b>%s</b>&nbsp;&nbsp;<font color='#666666'>[%s점]</font>"
-                               % (q.num, ans_str(q.ans), _fmt_pts(q.pts)), st_q))
-        if q.exp:
-            story.append(Paragraph(q.exp, st_p))
+        head = "<b>%s.</b> 정답 %s %s · [%s점]" % (q.num, ans_mark(q.ans), ans_text(q),
+                                              _fmt_pts(q.pts))
+        if q.concept:
+            head += " 핵심 개념: " + q.concept
+        blk = [Paragraph(head, st_q)]
+        blk += [Paragraph(ln, st_p) for ln in _lines(q.exp)]
         if q.src:
-            story.append(Paragraph("<font color='#666666'>출제 근거: %s</font>" % q.src, st_p))
+            blk.append(Paragraph("<font color='#666666'>출제 근거: %s</font>" % q.src, st_p))
+        story.append(KeepTogether(blk))
 
-    if ess:
-        story.append(Paragraph("논술형 예시 답안 및 채점 기준", st_h))
-        for q in ess:
-            story.append(Paragraph("<b>논술형 %s.</b> <font color='#666666'>[%s점]</font>"
-                                   % (q.num, _fmt_pts(q.pts)), st_q))
-            if q.subs:
-                for s in q.subs:
-                    mt = re.match(r"\s*(\(\d+\))", s.text)
-                    story.append(Paragraph("%s %s" % (mt.group(1) if mt else "·", s.ans), st_p))
-            if q.ans:
-                story.append(Paragraph("예시 답안: " + q.ans, st_p))
-            for crit, p in q.rubric:
-                story.append(Paragraph("· %s — %s점" % (crit, _fmt_pts(p)), st_p))
-            if q.src:
-                story.append(Paragraph("<font color='#666666'>출제 근거: %s</font>" % q.src, st_p))
+    for q in ess:
+        story.append(_SectionBar("논술형 %s 모범 답안과 채점 기준 (예시)" % q.num))
+        story.append(Paragraph("학교의 실제 채점 기준은 확인하지 못했으므로, 배점에 맞춘 예시 기준이다.", st_note))
+        parts = q.subs if q.subs else [q]
+        for s in parts:
+            tag = _sub_tag(q.num, s) if q.subs else "%s" % q.num
+            blk = [Paragraph("<b>%s</b> 답: %s · [%s점]" % (tag, s.ans, _fmt_pts(s.pts)), st_q)]
+            if s.model:
+                blk.append(Paragraph("모범 답안", st_label))
+                blk += [Paragraph(ln, st_p2) for ln in s.model]
+            if s.rubric:
+                blk.append(Paragraph("채점 기준", st_label))
+                for r in s.rubric:
+                    if isinstance(r, (tuple, list)):
+                        r = "%s %s점" % (r[0], _fmt_pts(r[1]))
+                    blk.append(Paragraph("· " + r, st_p2))
+            story.append(KeepTogether(blk))
+
+    title = exam.title + " 정답 및 해설"
+
+    def on_page(c, doc):
+        c.saveState()
+        c.setFont("KR", 8.5)
+        c.drawString(MARGIN_X, PAGE_H - 14 * mm, exam.top)
+        c.setFont("KR-B", 15)
+        c.drawString(MARGIN_X, PAGE_H - 22.5 * mm, title)
+        c.setLineWidth(0.9)
+        c.line(MARGIN_X, PAGE_H - 26 * mm, PAGE_W - MARGIN_X, PAGE_H - 26 * mm)
+        c.setFont("KR", 6.8)
+        c.setFillColor(GREY)
+        c.drawString(MARGIN_X, 9 * mm, footer)
+        c.drawRightString(PAGE_W - MARGIN_X, 9 * mm, str(doc.page))
+        c.restoreState()
 
     doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=MARGIN_X,
-                            rightMargin=MARGIN_X, topMargin=16 * mm,
-                            bottomMargin=16 * mm,
-                            title=exam.title + " 정답 및 해설")
-    doc.build(story)
+                            rightMargin=MARGIN_X, topMargin=30 * mm,
+                            bottomMargin=17 * mm, title=title)
+    doc.build(story, onFirstPage=on_page, onLaterPages=on_page)
     return path
+
+
+def _sub_tag(num, sub):
+    """'(1) ...' 형식의 소문항에서 '1-1' 같은 꼬리표를 만든다."""
+    mt = re.match(r"\s*\((\d+)\)", sub.text)
+    return "%s-%s" % (num, mt.group(1)) if mt else str(num)
