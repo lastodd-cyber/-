@@ -30,6 +30,16 @@ from reportlab.platypus import (BaseDocTemplate, Flowable, Frame, KeepTogether,
                                 PageBreak, PageTemplate, Paragraph, Spacer,
                                 Table, TableStyle)
 from reportlab.platypus.doctemplate import FrameBreak
+from reportlab.platypus import Paragraph as _RLParagraph
+
+
+class Paragraph(_RLParagraph):
+    """나눔고딕에 없는 빼기 기호(−)를 Times 계열 글꼴로 바꿔 찍는다."""
+
+    def __init__(self, text, style=None, *args, **kwargs):
+        if isinstance(text, str) and "−" in text:
+            text = text.replace("−", '<font name="MR">−</font>')
+        super().__init__(text, style, *args, **kwargs)
 
 # ---------------------------------------------------------------- 글꼴
 _HERE = os.path.dirname(os.path.abspath(__file__))
