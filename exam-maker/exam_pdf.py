@@ -447,6 +447,11 @@ class Essay:
                 blk.extend(s.parts)
                 blk.append(AnswerBox(s.box_h, s.label, s.answer_strip))
                 out.append(KeepTogether(blk))
+        if getattr(self, "keep_whole", False):
+            whole = []
+            for f in out:
+                whole.extend(f._content if isinstance(f, KeepTogether) else [f])
+            out = [KeepTogether(whole)]
         out.append(Spacer(1, 15))
         return out
 
@@ -480,8 +485,10 @@ PAGE_BREAK = PageBreak()
 # ---------------------------------------------------------------- 시험지
 class Exam:
     def __init__(self, top, title, footer=None, expect=None,
-                 essay_new_page=True, mc_label="선택형", essay_label="논술형"):
+                 essay_new_page=True, mc_label="선택형", essay_label="논술형",
+                 check_total=True):
         self.top, self.title = top, title
+        self.check_total = check_total
         self.footer = footer or ("가정통신문 시험 범위·교과서·학습지를 바탕으로 만든 "
                                  "자체 예상문제 · 학교 공식 시험지가 아님")
         self.expect = expect
@@ -513,7 +520,7 @@ class Exam:
         s = self.summary()
         msgs = []
         total = s["mc_pts"] + s["essay_pts"]
-        if abs(total - 100) > 1e-6:
+        if self.check_total and abs(total - 100) > 1e-6:
             msgs.append("총점이 100점이 아닙니다: %g점" % total)
         if self.expect:
             for k, v in self.expect.items():
@@ -532,10 +539,12 @@ class Exam:
 
     def _summary_text(self):
         s = self.summary()
-        txt = "%s %d문항 %g점" % (self.mc_label, s["mc"], s["mc_pts"])
+        parts = []
+        if s["mc"]:
+            parts.append("%s %d문항 %g점" % (self.mc_label, s["mc"], s["mc_pts"]))
         if s["essay"]:
-            txt += ", %s %d문항 %g점" % (self.essay_label, s["essay"], s["essay_pts"])
-        return txt
+            parts.append("%s %d문항 %g점" % (self.essay_label, s["essay"], s["essay_pts"]))
+        return ", ".join(parts)
 
     def build(self, path, key=True):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -717,7 +726,8 @@ def build_key(exam, path, footer=None):
             quick = q.ans
         story.append(Paragraph("<b>논술형 %s</b>&nbsp;&nbsp;%s" % (q.num, quick), st_quick))
 
-    story.append(_SectionBar("객관식 풀이"))
+    if mcs:
+        story.append(_SectionBar("객관식 풀이"))
     for q in mcs:
         head = "<b>%s.</b> 정답 %s %s · [%s점]" % (q.num, ans_mark(q.ans), ans_text(q),
                                               _fmt_pts(q.pts))
@@ -746,6 +756,8 @@ def build_key(exam, path, footer=None):
                         r = "%s %s점" % (r[0], _fmt_pts(r[1]))
                     blk.append(Paragraph("· " + r, st_p2))
             story.append(KeepTogether(blk))
+        if q.src:
+            story.append(Paragraph("<font color='#666666'>출제 근거: %s</font>" % q.src, st_p))
 
     title = exam.title + " 정답 및 해설"
 
