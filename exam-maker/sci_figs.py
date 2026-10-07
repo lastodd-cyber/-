@@ -242,3 +242,51 @@ def ink_beakers(temps=("10 ℃", "60 ℃"), labels=("(가)", "(나)"), w=200, h=
         _text(d, x + 28, 3, lab, 8.5)
         _text(d, x + 46, 66, "잉크", 7, color=GREY)
     return d
+
+
+# ---------------------------------------------------------------- 확산 유리관
+def diffusion_tube(w=220, h=62, left="기체 A를 묻힌 솜", right="기체 B를 묻힌 솜"):
+    """양 끝을 마개로 막은 긴 유리관과 양 끝의 솜, 가운데 표시."""
+    d = Drawing(w, h)
+    x0, x1, y, th = 14, w - 14, 30, 14
+    d.add(Rect(x0, y, x1 - x0, th, strokeColor=BLACK, strokeWidth=0.9,
+               fillColor=colors.HexColor("#F3F8FB")))
+    for xs in (x0 - 6, x1):
+        d.add(Rect(xs, y - 2, 6, th + 4, strokeColor=BLACK, strokeWidth=0.6,
+                   fillColor=GREY))
+    for cx in (x0 + 9, x1 - 9):
+        d.add(Ellipse(cx, y + th / 2, 6.5, 5.5, strokeColor=GREY, strokeWidth=0.6,
+                      fillColor=LIGHT))
+    mid = (x0 + x1) / 2.0
+    d.add(Line(mid, y - 5, mid, y + th + 5, strokeDashArray=[2, 2], strokeWidth=0.6,
+               strokeColor=GREY))
+    _text(d, mid, y + th + 8, "가운데", 7.5, color=GREY)
+    d.add(Line(x0 + 9, y - 1, x0 + 9, 14, strokeWidth=0.5, strokeColor=GREY))
+    d.add(Line(x1 - 9, y - 1, x1 - 9, 14, strokeWidth=0.5, strokeColor=GREY))
+    _text(d, x0 + 2, 5, left, 7.8, anchor="start")
+    _text(d, x1 - 2, 5, right, 7.8, anchor="end")
+    return d
+
+
+# ---------------------------------------------------------------- 힘의 화살표(모눈)
+def force_grid(arrows, ncol=12, nrow=5, cell=14, note=None):
+    """arrows: [(이름, x0, y0, x1, y1, (글자dx, 글자dy))] 모눈 칸 단위. 시작점에 점을 찍는다."""
+    pad = 6
+    w, h = ncol * cell + 2 * pad, nrow * cell + 2 * pad + (12 if note else 0)
+    d = Drawing(w, h)
+    oy = pad + (12 if note else 0)
+    for i in range(ncol + 1):
+        x = pad + i * cell
+        d.add(Line(x, oy, x, oy + nrow * cell, strokeWidth=0.4, strokeColor=LIGHT))
+    for j in range(nrow + 1):
+        y = oy + j * cell
+        d.add(Line(pad, y, pad + ncol * cell, y, strokeWidth=0.4, strokeColor=LIGHT))
+    for name, ax, ay, bx, by, (tx, ty) in arrows:
+        sx, sy = pad + ax * cell, oy + ay * cell
+        ex, ey = pad + bx * cell, oy + by * cell
+        arrow(d, sx, sy, ex, ey, width=1.4, head=6)
+        d.add(Circle(sx, sy, 2.2, fillColor=BLACK, strokeColor=BLACK))
+        _text(d, (sx + ex) / 2 + tx, (sy + ey) / 2 + ty, name, 9, font="MI")
+    if note:
+        _text(d, w - pad, 2, note, 7.5, anchor="end", color=GREY)
+    return d
